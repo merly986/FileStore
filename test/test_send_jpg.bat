@@ -1,0 +1,1 @@
+curl -X POST -S -H -F -u "admin:password" "file=face.jpg;type=image/jpg" 127.0.0.1:8000/fsapi/upload
