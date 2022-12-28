@@ -1,8 +1,14 @@
++merge order by part_number
++serialize path parts
++parts() as serializer = list
+file_checksum
+test for checksum on merge
+/delete require key in request body
 fs_log
 python.logging
-part random size
-files send
-file get
++part random size
++files send
++file get
 cleaner
 stress test
 	big files
@@ -13,5 +19,5 @@ examples fs api
 	python
 	cmd , curl?
 	javascript
-example fsplitmerge
-class comments, args
++example file split merge
+class comments, args, fields

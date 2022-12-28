@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here.
-from .models import Fsfile,Fspath
+from .models import Fsfile,Fspart
 
 admin.site.register(Fsfile)
-admin.site.register(Fspath)
+admin.site.register(Fspart)
