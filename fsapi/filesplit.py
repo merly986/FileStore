@@ -1,16 +1,72 @@
 from ast import Div
 import os.path
-from os import remove, fstat, makedirs
+from os import fstat, makedirs
 from uuid import uuid4
 from random import randint
-import ntpath
 from typing import Callable, Optional
 from io import BytesIO,BufferedReader
 import time
 import logging
 from sys import getsizeof
-import csv
 import hashlib
+from django.core.files import File
+
+from io import BufferedReader,RawIOBase, DEFAULT_BUFFER_SIZE
+
+def chain_streams(streams, buffer_size=DEFAULT_BUFFER_SIZE):
+    """
+    Chain an iterable of streams together into a single buffered stream.
+    Usage:
+        def generate_open_file_streams():
+            for file in filenames:
+                yield open(file, 'rb')
+        f = chain_streams(generate_open_file_streams())
+        f.read()
+    """
+
+    class ChainStream(RawIOBase):
+        def __init__(self):
+            self.leftover = b''
+            self.stream_iter = iter(streams)
+            try:
+                self.stream = next(self.stream_iter)
+            except StopIteration:
+                self.stream = None
+
+        def readable(self):
+            return True
+
+        def _read_next_chunk(self, max_length):
+            # Return 0 or more bytes from the current stream, first returning all
+            # leftover bytes. If the stream is closed returns b''
+            if self.leftover:
+                return self.leftover
+            elif self.stream is not None:
+                return self.stream.read(max_length)
+            else:
+                return b''
+
+        def readinto(self, b):
+            buffer_length = len(b)
+            chunk = self._read_next_chunk(buffer_length)
+            while len(chunk) == 0:
+                # move to next stream
+                if self.stream is not None:
+                    self.stream.close()
+                try:
+                    self.stream = next(self.stream_iter)
+                    chunk = self._read_next_chunk(buffer_length)
+                except StopIteration:
+                    # No more streams to chain together
+                    self.stream = None
+                    return 0  # indicate EOF
+            output, self.leftover = chunk[:buffer_length], chunk[buffer_length:]
+            b[:len(output)] = output
+            return len(output)
+
+    return BufferedReader(ChainStream(), buffer_size=buffer_size)
+
+
 
 log = logging.getLogger(__name__)
 
@@ -102,15 +158,6 @@ class FSplit:
         """
         self._outputdir = value
 
-    # @parts.setter
-    # def parts(self, value: dict) -> None:
-    #     """Sets dictionary storing new paths and filenames
-
-    #     Args:
-    #         value (dict): {'filename':'filepath'}
-    #     """
-    #     self._parts = value
-
     @staticmethod
     def _getreadbuffersize(splitsize: int) -> int:
         """Returns buffer size to be used with the file reader. 1 MB or less
@@ -121,23 +168,10 @@ class FSplit:
         Returns:
             int: Buffer size
         """
-        defaultchunksize = 1000000 # 1 MB
+        defaultchunksize = 64000# 64 Kb # 1000000 # 1 MB
         if splitsize < defaultchunksize:
             return splitsize
         return defaultchunksize
-
-    def _generate_boring_parts(self,splitnum: int) -> None:
-        """Generates dict of boring numerated parts of that file
-            Not implemented yet
-        Args:
-            splitnum (int): Total split parts count
-        """
-        self._parts=[]
-        # filename = ntpath.split(file)[1]
-        # fname, ext = ntpath.splitext(filename)
-        # for i in range(splitnum):
-        #     splitfilename = f'{fname}_{splitnum}{ext}'
-        #     self._parts[splitfilename]=''
 
     def _generate_random_parts(self) -> None:
         """Generates dict of new random filenames and paths
@@ -150,17 +184,13 @@ class FSplit:
             #randomize parts count
             item_count=randint(3, 5)
             i,k=divmod(self._fsize,item_count)
-            # print ('average part size',i)
-            # self._limit=(divmod(i,self.DEFAULT_CHUNK_SIZE)[0]+1) * self.DEFAULT_CHUNK_SIZE
             _limit=i+1
             
-        print(item_count, 'parts, average size ',_limit)
         self._parts=[]
         part_counter=0
         for i in range(item_count):
             new_uuid_path = str(uuid4()).replace('-',os.path.sep)
             new_uuid_name=str(uuid4())
-            # self._parts[new_uuid_name]=new_uuid_path
             if i==item_count-1:
                 #last part get the remains
                 part_limit=self._fsize-part_counter
@@ -176,7 +206,6 @@ class FSplit:
             new_part['part_size']=part_limit
             new_part['part_number']=i
             self._parts.append(new_part)
-        print(self._parts)
 
     def _create_parts_paths(self):
         #creates set of new directories 
@@ -194,7 +223,6 @@ class FSplit:
         Raises:
             ValueError: Unsupported split type
         """
-        print ('_____process')
         splitnum: int = kwargs.get('splitnum', 0)
         processed = 0
         if splitnum>=len(self._parts):
@@ -205,14 +233,13 @@ class FSplit:
         splitfilesize= self._parts[splitnum]['part_size'] #new file size
         splitfile = os.path.join(splitfilepath, splitfilename) #full path
         gonext=False
-        print(splitnum,splitfile,splitfilesize)
 
         if not os.path.isdir(splitfilepath):
             raise NotADirectoryError(f'invalid path'+{splitfilepath})
         writer = open(splitfile, mode='wb+')
         try:
             # splitfilesize = total destination size of that part
-            # buffersize = 1Mb or lower in case of small files
+            # buffersize = 64 Kb or lower in case of small files
             # chunksize = readed piece from source file
             # processed = total worked bytes of that part
 
@@ -221,7 +248,6 @@ class FSplit:
             while 1:
                 if processed >= splitfilesize: 
                     gonext = True
-                    print('gonext processed',processed)
                     break
                 if self.terminate:
                     log.info('Term flag has been set by the user.')
@@ -230,16 +256,13 @@ class FSplit:
                 else:
                     if buffersize>splitfilesize-processed:
                         buffersize=splitfilesize-processed
-                    print('buffersize',buffersize)
                     chunk = reader.read(buffersize)
                     self._hash_md5.update(chunk)
-                    print('readed',len(chunk))
 
                 if not chunk:
                     break
                 chunksize = len(chunk)
                 writer.write(chunk)
-                print('wrote',chunksize)
                 processed += chunksize                    
         finally:
             writer.close()
@@ -258,29 +281,27 @@ class FSplit:
         runtime = int((endtime - self._starttime)/60)
         log.info(f'Process completed in {runtime} min(s)')
 
-    def toparts_mem(self, file: BytesIO, callback: Callable = None)-> dict:
+    def toparts_mem(self, file: File, callback: Callable = None)-> dict:
         """Splits file into random parts
 
         Args:
-            file (BytesIO): File like object
+            file (File): File like object from Django
             callback (Callable, optional): Callback function to invoke after each split that passes
                 split file path, size [str, int] as args. Defaults to None.
 
          Returns:
             dict: Set of paths to resulting file parts. parts[file name]=file path (relative to outputdir)
         """  
-        # self._fsize=getsizeof(file)
-        self._fsize=fstat(file.fileno()).st_size
-        #self._fsize=file.getbuffer().nbytes
-        #should be 700161 for test_file.pdf
-        
-        print(self._fsize)
+        self._fsize=file.size
+        self._checksum=''
         if self._fsize==0:
             raise NotADirectoryError(
                 f'Given file is empty.')
         self._generate_random_parts()
         self._create_parts_paths()
-        self._process(file, callback)
+        
+        with file.open(mode=None) as f:
+            self._process(f, callback)
         self._endprocess()
         self._checksum=self._hash_md5.hexdigest()
         return self._parts
@@ -299,7 +320,6 @@ class FSplit:
         with open(filename, 'rb+') as source:
             self._fsize=fstat(source.fileno()).st_size
             self._checksum=''
-            # print(self._fsize)
             if self._fsize==0:
                 raise NotADirectoryError(f'Given file is empty.')
             self._generate_random_parts()
@@ -308,8 +328,6 @@ class FSplit:
             self._endprocess()
             self._checksum=self._hash_md5.hexdigest()
             return self._parts 
-###############################################################
-
 
 class FMerge:
 
@@ -399,8 +417,8 @@ class FMerge:
         """Runs statements that marks the completion of the process
         """
         endtime = time.time()
-        runtime = int((endtime - self._starttime)/60)
-        log.info(f'Process completed in {runtime} min(s)')
+        runtime = int((endtime - self._starttime))
+        log.info(f'Process completed in {runtime} seconds')
 
     def test_parts(self, parts:list,) -> bool:
         """Checks for right format of parts parameter
@@ -433,19 +451,14 @@ class FMerge:
                 The callback passes merged file path, size [str, int] as args. 
                 Defaults to None.
         """
-        # outputfile =  os.path.join(self.inputdir, self._outputfilename)
-        # if os.path.isfile(outputfile):
-        #     remove(outputfile)
         if not(self.test_parts(parts)):
             log.info('Parts provided are invalid')
             return
         full_filepath=os.path.join(filepath,filename)
         full_size=0
-        print (parts)
         for item in parts:
             splitfile=os.path.join(self.inputdir,item['part_path'],  item['part_name'], )
             full_size+=int(item['part_size'])
-            # print (splitfile)
             with open(full_filepath, mode='ab+') as writer:
                 with open(splitfile, mode='rb') as splitreader:
                     for line in splitreader:
@@ -465,7 +478,7 @@ class FMerge:
         self._endprocess()
         return full_filepath
     
-    def fromparts_mem(self, parts: dict, file : BytesIO, callback: Optional[Callable] = None) -> BytesIO:
+    def fromparts_mem(self, parts: dict, callback: Optional[Callable] = None) -> BytesIO:
         """Merges the split files back into one single file
 
         Args:
@@ -475,28 +488,13 @@ class FMerge:
                 The callback passes merged file path, size [str, int] as args. 
                 Defaults to None.
         """
-        # outputfile =  os.path.join(self.inputdir, self._outputfilename)
-        # if os.path.isfile(outputfile):
-        #     remove(outputfile)
-        for item in parts.keys():
-            splitfile=os.path.join(self.inputdir,parts[item],  item )
-            # print (splitfile)
-            # with open(file, mode='ab+') as writer:
-            #     with open(splitfile, mode='rb') as splitreader:
-            #         for line in splitreader:
-            #             if self.terminate:
-            #                 log.info('Term flag has been set by the user.')
-            #                 log.info('Terminating the process.')
-            #                 break
-            #             writer.write(line)
-            with open(splitfile, mode='rb') as splitreader:
-                for line in splitreader:
-                    if self.terminate:
-                        log.info('Term flag has been set by the user.')
-                        log.info('Terminating the process.')
-                        break
-                    file.write(line)
-        if callback:
-            callback(file, os.path.getsize(file))
-        self._endprocess()
-        return file
+        def generate_open_file_streams(parts: dict):
+            for item in parts:
+                splitfile=os.path.join(self.inputdir,item['part_path'],  item['part_name'], )
+                yield open(splitfile, 'rb')
+
+        if not(self.test_parts(parts)):
+            log.info('Parts provided are invalid')
+            return
+
+        return chain_streams(generate_open_file_streams(parts))

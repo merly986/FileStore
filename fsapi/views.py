@@ -1,8 +1,7 @@
 from rest_framework import viewsets,views
-from django.http import HttpResponse
-import requests
+from django.http import HttpResponse, FileResponse
 from datetime import datetime
-from django.shortcuts import get_object_or_404,get_list_or_404
+from django.shortcuts import get_object_or_404
 from .serializers import FSFileSerializer,FSPartSerializer
 from .models import Fsfile, Fspart
 from rest_framework.parsers import FileUploadParser
@@ -13,31 +12,12 @@ from sys import getsizeof
 from uuid import uuid4
 
 class FileUploadView(views.APIView):
-    parser_classes = [FileUploadParser]#(views.FileUploadParser, )
+    parser_classes = [FileUploadParser]
 
     def post(self, request, format=None):
         up_file = request.FILES['file']
-
         Split = FSplit(settings.STORAGE_DIR)
-        #########################################################
-        ## file version
-        # save file to temp folder
-        filestorage_temp_dir=settings.TEMP_DIR
-        fname= os.path.join(filestorage_temp_dir, str(uuid4()))
-        if os.path.exists(fname):
-            os.remove(fname)
-        with open(fname, 'wb+') as destination:
-            i=0
-            for chunk in up_file.chunks():
-                destination.write(chunk)
-                i=i+1
-            print('chunks ',i)
-
-        #split file to parts
-        Split.toparts_file(fname)
-        #clear temp file
-        os.remove(fname)
-        #########################################################
+        Split.toparts_mem(up_file)
 
         #save to db fileinfo and paths
         new_file=Fsfile.objects.create()
@@ -66,18 +46,6 @@ class FileUploadView(views.APIView):
             content_type='application/json', 
             status=201)
 
-class FSFileViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Fsfile.objects.all().order_by('id')
-    serializer_class = FSFileSerializer
-    #def pre_save(self, obj):
-    #    obj.user_created = self.request.user
-
-class FSPartViewSet(viewsets.ReadOnlyModelViewSet):
-    #standart rest api fro providing path information
-    queryset = Fspart.objects.all()
-    serializer_class = FSPartSerializer
-
-
 class FSFileViewUuidSet(viewsets.ReadOnlyModelViewSet):
 
     def info(self, request, **kwargs):
@@ -86,7 +54,6 @@ class FSFileViewUuidSet(viewsets.ReadOnlyModelViewSet):
         queryset = Fsfile.objects.all()
         file_info = get_object_or_404(queryset, file_uuid=uuid)
         serializer = FSFileSerializer(file_info)
-        print(serializer.data)
         return HttpResponse (
             content=str(serializer.data), 
             content_type='application/json', 
@@ -97,7 +64,6 @@ class FSFileViewUuidSet(viewsets.ReadOnlyModelViewSet):
         import mimetypes
         #request to download file
         uuid = kwargs.get('uuid', None)
-        print ('download',uuid)
         #find file info
         file_queryset = Fsfile.objects.all()
         file_info = get_object_or_404(file_queryset, file_uuid=uuid)
@@ -106,42 +72,14 @@ class FSFileViewUuidSet(viewsets.ReadOnlyModelViewSet):
         parts=[]
         for item in Fspart.objects.filter(file_id=file_info):
             parts.append(FSPartSerializer(item).data)
-        print(parts)
-        #########################################################
-        #file version
-        #bring them together in temp folder
-        temp_dir =settings.TEMP_DIR
-        storage_dir =settings.STORAGE_DIR
-        temp_name =  str(uuid4())
-        merge=FMerge(storage_dir)
-        fpath=merge.fromparts_file(parts,temp_dir,temp_name)
-        if fpath=='':
-            response = HttpResponse()
-            json!
-            response.status_code=502
-            return response
-        # send them to client
-        if file_info.file_checksum!=merge.checksum:
-            response = HttpResponse()
-            json!
-            response.status_code=501
-            return response
-        with open(fpath, 'rb') as f:
-            data = f.read()
-        #########################################################
+
+        merge=FMerge(settings.STORAGE_DIR)
+        response=FileResponse(merge.fromparts_mem(parts))
         mime_type_guess = mimetypes.guess_type(file_info.file_name)
-        response = HttpResponse(data)
-        os.remove(fpath)
         response['Content-Type']=mime_type_guess[0]
         response['Content-Disposition'] = 'attachment; filename="'+file_info.file_name+'"'
         response.status_code=200
         return response
-
-        # return HttpResponse (
-        #     content=str(parts), 
-        #     content_type='application/json', 
-        #     status=200
-        #     )
 
     def delete(self, request, **kwargs):
         #/fsapi/aa-aaa-aaa-aaa/delete?owner_key=bbb-bbbbb-bbbbbbb
