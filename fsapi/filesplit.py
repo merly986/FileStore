@@ -91,8 +91,8 @@ class FSplit:
         # self._limit = 0
         self.DEFAULT_CHUNK_SIZE=1000000 #1 Mb
         self._starttime = time.time()
-        self._hash_md5 = hashlib.md5()
         self._checksum=''
+        self._processtime=0
 
     @property
     def terminate(self) -> bool:
@@ -120,6 +120,15 @@ class FSplit:
             str: md5 checksum
         """
         return self._checksum
+
+    @property
+    def processtime(self) -> int:
+        """Returns seconds of process time
+
+        Returns:
+            int: seconds
+        """
+        return self._processtime
 
     @property
     def outputdir(self) -> str:
@@ -204,6 +213,7 @@ class FSplit:
             new_part['part_path']=new_uuid_path
             new_part['part_name']=new_uuid_name
             new_part['part_size']=part_limit
+            new_part['part_checksum']=''
             new_part['part_number']=i
             self._parts.append(new_part)
 
@@ -257,7 +267,6 @@ class FSplit:
                     if buffersize>splitfilesize-processed:
                         buffersize=splitfilesize-processed
                     chunk = reader.read(buffersize)
-                    self._hash_md5.update(chunk)
 
                 if not chunk:
                     break
@@ -278,8 +287,18 @@ class FSplit:
         """Runs statements that marks the completion of the process
         """
         endtime = time.time()
-        runtime = int((endtime - self._starttime)/60)
-        log.info(f'Process completed in {runtime} min(s)')
+        self._processtime = int((endtime - self._starttime)/60)
+        log.info(f'Process completed in {self._processtime} min(s)')
+
+    def md5_for_file(self, file:File, block_size=2**20):
+        md5 = hashlib.md5()
+        while True:
+            data = file.read(block_size)
+            if not data:
+                break
+            md5.update(data)
+        self._checksum=md5.hexdigest()
+        return md5.hexdigest()
 
     def toparts_mem(self, file: File, callback: Callable = None)-> dict:
         """Splits file into random parts
@@ -300,10 +319,11 @@ class FSplit:
         self._generate_random_parts()
         self._create_parts_paths()
         
-        with file.open(mode=None) as f:
+        #with file.open(mode=None) as f:
+        with file.open('rb') as f:
+            self.md5_for_file(file=f)
             self._process(f, callback)
         self._endprocess()
-        self._checksum=self._hash_md5.hexdigest()
         return self._parts
 
     def toparts_file(self, filename: str, callback: Callable = None)-> list:
@@ -326,7 +346,7 @@ class FSplit:
             self._create_parts_paths()
             self._process(source, callback)
             self._endprocess()
-            self._checksum=self._hash_md5.hexdigest()
+            self._checksum=self.md5_for_file(source)
             return self._parts 
 
 class FMerge:
@@ -346,8 +366,8 @@ class FMerge:
         self._size=0
         self._parts=[]
         self._starttime = time.time()
-        self._hash_md5=hashlib.md5()
         self._checksum=''
+        self._processtime=0
 
     @property
     def terminate(self) -> bool:
@@ -375,6 +395,15 @@ class FMerge:
             str: md5 checksum
         """
         return self._checksum
+
+    @property
+    def processtime(self) -> int:
+        """Returns seconds of process time
+
+        Returns:
+            int: seconds
+        """
+        return self._processtime
 
     @property
     def inputdir(self) -> str:
@@ -417,8 +446,8 @@ class FMerge:
         """Runs statements that marks the completion of the process
         """
         endtime = time.time()
-        runtime = int((endtime - self._starttime))
-        log.info(f'Process completed in {runtime} seconds')
+        self._processtime = int((endtime - self._starttime))
+        log.info(f'Process completed in {self._processtime} seconds')
 
     def test_parts(self, parts:list,) -> bool:
         """Checks for right format of parts parameter
@@ -436,6 +465,8 @@ class FMerge:
             if "part_name" not  in item:
                     res=False
             if "part_size" not in item:
+                    res=False
+            if "part_checksum" not in item:
                     res=False
         return res
 
@@ -466,11 +497,10 @@ class FMerge:
                             log.info('Term flag has been set by the user.')
                             log.info('Terminating the process.')
                             break
-                        self._hash_md5.update(line)
                         writer.write(line)
                 #check for resulting file size
                 self._fsize=fstat(writer.fileno()).st_size
-        self._checksum=self._hash_md5.hexdigest()
+        self._checksum=''
         if full_size!=self._fsize:
             log.info('Resulting merged file size',self._fsize,'differs from parts overall file size',full_size)
         if callback:

@@ -1,43 +1,27 @@
-file_public_key, file_master_key 
-	file_public_key only for download and info
-	file_master_key can delete, download, info, edit
-	upload return both keys
+file_uuid, file_master_uuid 
 	index on this fields in DB
-urls to
-	filestore/download/<UUID>
-	filestore/delete/<UUID>
-	filestore/info/<UUID>
-	filestore/upload
-field expire date fo file
-	to mark for delete set this to current_date
-file edit
-	json with new values
-	file on file system stays the same
-file info
-	on master_key returns both master and public keys
 filesplit.__init__ parameter = memory/file
 on upload file_checksum
 on download check checksum on merge
-python.logging to files everyday
+filesplit time to process
 log parser formatter example
 cleaner
-	check marked for delete (expired)
-	delete files
-	set ts_deleted attribute
+	test endpoint /clean
+	check marked for delete
+	delete files and paths
+	set ts_cleared attribute
 stress test
+	async bombarding
 	big files
-	VERY small files
+	VERY small files 1b
 	memory usage
 	many connections
-	async bombarding
 examples fs api
-	with use of public and hidden master key
+	with use of public and master key
 	python
-	cmd , curl?
+	delphi
 	javascript
 	html
+	doc/xls
+	ods/odt
 class comments, args, fields
-
-
-***OPTIONAL
-restrict views for authenticated users only

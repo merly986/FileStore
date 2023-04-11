@@ -135,5 +135,5 @@ STATIC_URL = '/static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-TEMP_DIR="C:\\Users\\Akbaa\\filestore\\temp"
-STORAGE_DIR="C:\\Users\\Akbaa\\filestore\\storage"
+TEMP_DIR="C:\\filestore\\temp"
+STORAGE_DIR="C:\\filestore\\storage"
